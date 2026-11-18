@@ -1,0 +1,103 @@
+name: Build LibWrt
+
+on:
+  repository_dispatch:
+  workflow_dispatch:
+    inputs:
+      ssh:
+        description: 'SSH connection to Actions'
+        required: false
+        default: 'false'
+        type: boolean
+
+# 设置并发控制，避免重复触发
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: 检查代码
+      uses: actions/checkout@v4
+
+    - name: 初始化编译环境
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+        sudo docker image prune --all --force
+        sudo -E apt-get -y update
+        sudo -E apt-get -y purge azure-cli ghc zulu* llvm* firefox google* dotnet* powershell openjdk* mysql* php* mongodb* snapshot* android*
+        sudo -E apt-get -y install $(cat << 'EOF'
+        build-setup:
+        libncurses5-dev libncursesw5-dev
+        ack antlr3 asciidoc autoconf automake autopoint binutils bison build-setup
+        bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext
+        gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386
+        libelf-dev libglib2.0-dev libgmp3-dev liblzo2-dev libpcre2-dev libssl-dev
+        libtool lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf
+        python3 python3-pip python3-ply python3-docutils qemu-utils re2c rsync
+        scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim
+        wget xmlto xxd zlib1g-dev
+        EOF
+        )
+        sudo -E apt-get -y autoremove --purge
+        sudo -E apt-get clean
+
+    - name: 克隆 LibWrt 源码
+      run: |
+        # 这里以 LiBwrt 常见的 openwrt-6.x 仓库为例（可按需更改为你的目标分支）
+        git clone https://github.com/LiBwrt/openwrt-6.x.git openwrt
+        cd openwrt
+        # 如果你需要指定某一个 commit 或标签，可以在这里 checkout
+
+    - name: 更新与安装 Feeds 插件
+      run: |
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: 加载自定义配置 (.config)
+      run: |
+        # 如果你在根目录下放了自定义的 .config 文件，这里会将其复制到源码目录
+        [ -e $GITHUB_WORKSPACE/.config ] && cp $GITHUB_WORKSPACE/.config openwrt/.config
+        cd openwrt
+        make defconfig
+
+    - name: SSH 连接调试（可选，如果触发编译时开启了 ssh 选项）
+      uses: P3TERX/ssh-action@v1.0.2
+      if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh  != 'false') || contains(github.event.action, 'ssh')
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    - name: 下载依赖并编译固件
+      run: |
+        cd openwrt
+        make download -j8
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+        # 开始编译，-j$(nproc) 充分利用多核性能
+        make -j$(nproc) || make -j1 V=s
+
+    - name: 整理编译好的固件
+      id: organize
+      if: (!cancelled())
+      run: |
+        cd openwrt
+        rm -rf datadir
+        mkdir -p datadir
+        # 查找 bin/targets 下生成的固件包并移动
+        find bin/targets/ -type f \( -name "*.bin" -o -name "*.tar" -o -name "*.img.gz" -o -name "*.itb" \) -exec cp {} datadir/ \;
+        echo "FIRMWARE_PATH=openwrt/datadir" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_ENV
+
+    - name: 上传固件到 GitHub Artifacts 空间
+      uses: actions/upload-artifact@v4
+      if: steps.organize.outputs.status == 'success' && !cancelled()
+      with:
+        name: LibWrt-Firmware-${{ github.run_id }}
+        path: ${{ env.FIRMWARE_PATH }}
