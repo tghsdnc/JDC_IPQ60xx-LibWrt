@@ -123,6 +123,7 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
+      
       - name: Generate JDCloud Arthur configuration
         if: steps.check.outputs.build == 'true'
         working-directory: libwrt
@@ -130,13 +131,14 @@ jobs:
           cat > .config <<'EOF'
           CONFIG_TARGET_qualcommax=y
           CONFIG_TARGET_qualcommax_ipq60xx=y
-          CONFIG_TARGET_DEVICE_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y
+          CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y
           EOF
 
           make defconfig
 
-          grep -q '^CONFIG_TARGET_DEVICE_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y' .config || {
-            echo "设备配置检查失败！"
+          grep -q '^CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y' .config || {
+            echo "京东云亚瑟设备配置不存在！"
+            grep -i 'jdcloud' .config || true
             exit 1
           }
 
