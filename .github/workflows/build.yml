@@ -177,6 +177,27 @@ jobs:
           path: output/
           retention-days: 30
           if-no-files-found: error
+      
+      - name: Publish GitHub Release
+        if: steps.check.outputs.build == 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: Arthur-${{ steps.check.outputs.tag }}
+          name: JDCloud Arthur Firmware ${{ steps.check.outputs.tag }}
+          body: |
+            京东云亚瑟（JDC Arthur / RE-SS-01）自动编译固件。
+
+            上游项目：LiBwrt/LibWrt
+            上游版本：${{ steps.check.outputs.tag }}
+            源码提交：${{ env.SOURCE_COMMIT }}
+
+            设备平台：Qualcomm IPQ6000 / IPQ60XX
+          files: |
+            output/*
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          make_latest: true
+
 
       - name: Record successful version
         if: steps.check.outputs.build == 'true'
