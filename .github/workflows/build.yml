@@ -124,6 +124,7 @@ jobs:
           ./scripts/feeds install -a
 
       
+      
       - name: Generate JDCloud Arthur configuration
         if: steps.check.outputs.build == 'true'
         working-directory: libwrt
@@ -132,17 +133,30 @@ jobs:
           CONFIG_TARGET_qualcommax=y
           CONFIG_TARGET_qualcommax_ipq60xx=y
           CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y
+
+          CONFIG_PACKAGE_kmod-inet-diag=y
+          CONFIG_PACKAGE_kmod-nft-tproxy=y
+          CONFIG_PACKAGE_kmod-tun=y
           EOF
 
           make defconfig
 
           grep -q '^CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y' .config || {
             echo "京东云亚瑟设备配置不存在！"
-            grep -i 'jdcloud' .config || true
             exit 1
           }
 
+          for pkg in kmod-inet-diag kmod-nft-tproxy kmod-tun; do
+            grep -q "^CONFIG_PACKAGE_${pkg}=m" .config || {
+              echo "内核模块配置丢失：$pkg"
+              exit 1
+            }
+          done
+
           cp .config Arthur.config
+
+          echo "设备及内核模块配置检查通过："
+          grep -E '^CONFIG_PACKAGE_kmod-(inet-diag|nft-tproxy|tun)=m$' .config
 
       - name: Download packages
         if: steps.check.outputs.build == 'true'
