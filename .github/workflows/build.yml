@@ -3,7 +3,6 @@ name: LiBwrt Stable Auto Build - JDCloud Arthur
 
 on:
   schedule:
-    # 每周一检查，由脚本控制每两周真正执行一次
     - cron: "0 2 * * 1"
   workflow_dispatch:
     inputs:
@@ -39,7 +38,6 @@ jobs:
         run: |
           set -e
 
-          # 定时任务每周触发，但只在双周执行
           if [ "$EVENT_NAME" = "schedule" ]; then
             ANCHOR=$(date -u -d "2026-01-05" +%s)
             NOW=$(date -u +%s)
@@ -52,7 +50,6 @@ jobs:
             fi
           fi
 
-          # 获取上游最新正式 Release
           TAG=$(curl -fsSL \
             https://api.github.com/repos/LiBwrt/LibWrt/releases/latest \
             | jq -r '.tag_name')
@@ -64,16 +61,13 @@ jobs:
 
           OLD=$(cat last-built-version.txt 2>/dev/null || true)
 
-          echo "上游最新版本：$TAG"
+          echo "上游版本：$TAG"
           echo "上次成功版本：${OLD:-无}"
-
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
           if [ "$OLD" = "$TAG" ] && [ "$FORCE" != "true" ]; then
-            echo "版本没有变化，跳过编译。"
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
-            echo "需要编译。"
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -116,33 +110,92 @@ jobs:
 
           echo "SOURCE_COMMIT=$(git -C libwrt rev-parse HEAD)" >> "$GITHUB_ENV"
 
-      - name: Install and update feeds
+      - name: Add OpenClash feed
         if: steps.check.outputs.build == 'true'
         working-directory: libwrt
         run: |
+          set -e
+
+          grep -q 'openclash' feeds.conf.default || \
+            echo 'src-git openclash https://github.com/vernesong/OpenClash.git' >> feeds.conf.default
+
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      
+          ./scripts/feeds install -p openclash luci-app-openclash
+
+          test -d package/feeds/openclash/luci-app-openclash
+
       - name: Generate JDCloud Arthur configuration
         if: steps.check.outputs.build == 'true'
         working-directory: libwrt
         run: |
+          set -e
+
           cat > .config <<'EOF'
           CONFIG_TARGET_qualcommax=y
           CONFIG_TARGET_qualcommax_ipq60xx=y
           CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y
+
+          # OpenClash
+          CONFIG_PACKAGE_luci-app-openclash=y
+
+          # TUN
+          CONFIG_PACKAGE_kmod-tun=y
+
+          # nftables transparent proxy
+          CONFIG_PACKAGE_kmod-nft-tproxy=y
+          CONFIG_PACKAGE_kmod-inet-diag=y
+
+          # OpenClash runtime dependencies
+          CONFIG_PACKAGE_dnsmasq-full=y
+          CONFIG_PACKAGE_bash=y
+          CONFIG_PACKAGE_curl=y
+          CONFIG_PACKAGE_ca-bundle=y
+          CONFIG_PACKAGE_ip-full=y
+          CONFIG_PACKAGE_ruby=y
+          CONFIG_PACKAGE_ruby-yaml=y
+          CONFIG_PACKAGE_unzip=y
           EOF
 
           make defconfig
 
-          grep -q '^CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y' .config || {
-            echo "京东云亚瑟设备配置不存在！"
-            grep -i 'jdcloud' .config || true
-            exit 1
-          }
+          echo "检查设备配置..."
+          grep -q '^CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y' .config
+
+          echo "检查 OpenClash..."
+          grep -E '^CONFIG_PACKAGE_luci-app-openclash=' .config || true
+
+          echo "检查 TUN..."
+          grep -E '^CONFIG_PACKAGE_kmod-tun=' .config || true
+
+          echo "检查 TProxy..."
+          grep -E '^CONFIG_PACKAGE_kmod-nft-tproxy=' .config || true
+
+          echo "检查内核 TUN 选项..."
+          grep -E '^CONFIG_KERNEL_TUN=' .config || true
 
           cp .config Arthur.config
+
+      - name: Verify required packages
+        if: steps.check.outputs.build == 'true'
+        working-directory: libwrt
+        run: |
+          set -e
+
+          for pkg in \
+            luci-app-openclash \
+            kmod-tun \
+            kmod-nft-tproxy \
+            kmod-inet-diag
+          do
+            if ! grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
+              echo "错误：${pkg} 没有成功进入固件配置"
+              exit 1
+            fi
+          done
+
+          echo "必要软件包已进入配置。"
 
       - name: Download packages
         if: steps.check.outputs.build == 'true'
@@ -156,7 +209,20 @@ jobs:
         run: |
           make -j1 V=s
 
-      
+      - name: Verify build output
+        if: steps.check.outputs.build == 'true'
+        working-directory: libwrt
+        run: |
+          set -e
+
+          FIRMWARE_DIR="bin/targets/qualcommax/ipq60xx"
+
+          find "$FIRMWARE_DIR" -type f \
+            \( -name '*jdcloud_re-ss-01*.bin' -o -name '*.manifest' \)
+
+          grep -R 'luci-app-openclash' "$FIRMWARE_DIR" \
+            --include='*.manifest' || true
+
       - name: Collect firmware
         if: steps.check.outputs.build == 'true'
         run: |
@@ -174,7 +240,7 @@ jobs:
             -name '*jdcloud_re-ss-01-squashfs-sysupgrade.bin' | head -n 1)
 
           if [ -z "$FACTORY" ] || [ -z "$SYSUPGRADE" ]; then
-            echo "错误：没有找到工厂固件或升级固件！"
+            echo "没有找到工厂固件或升级固件！"
             find "$FIRMWARE_DIR" -maxdepth 1 -type f -name '*.bin'
             exit 1
           fi
@@ -182,14 +248,12 @@ jobs:
           cp "$FACTORY" output/
           cp "$SYSUPGRADE" output/
 
+          cp libwrt/Arthur.config output/
+
+          cp "$FIRMWARE_DIR"/*.manifest output/ 2>/dev/null || true
+
           echo "最终发布文件："
           ls -lh output/
-
-          COUNT=$(find output -maxdepth 1 -type f -name '*.bin' | wc -l)
-          if [ "$COUNT" -ne 2 ]; then
-            echo "错误：发布文件数量不是两个！"
-            exit 1
-          fi
 
       - name: Upload firmware
         if: steps.check.outputs.build == 'true'
@@ -199,7 +263,7 @@ jobs:
           path: output/
           retention-days: 30
           if-no-files-found: error
-      
+
       - name: Publish GitHub Release
         if: steps.check.outputs.build == 'true'
         uses: softprops/action-gh-release@v3
@@ -207,19 +271,22 @@ jobs:
           tag_name: Arthur-${{ steps.check.outputs.tag }}
           name: JDCloud Arthur Firmware ${{ steps.check.outputs.tag }}
           body: |
-            京东云亚瑟（JDC Arthur / RE-SS-01）自动编译固件。
+            京东云亚瑟 RE-SS-01 自动编译固件。
 
-            上游项目：LiBwrt/LibWrt
+            上游：LiBwrt/LibWrt
             上游版本：${{ steps.check.outputs.tag }}
             源码提交：${{ env.SOURCE_COMMIT }}
 
-            设备平台：Qualcomm IPQ6000 / IPQ60XX
+            已配置：
+            - OpenClash
+            - TUN 内核支持
+            - nftables TProxy
+            - Qualcomm NSS
           files: |
-            output/*.bin
+            output/*
           fail_on_unmatched_files: true
           overwrite_files: true
           make_latest: true
-
 
       - name: Record successful version
         if: steps.check.outputs.build == 'true'
