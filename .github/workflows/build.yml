@@ -36,6 +36,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           FORCE: ${{ inputs.force }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -e
 
