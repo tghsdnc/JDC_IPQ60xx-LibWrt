@@ -156,20 +156,40 @@ jobs:
         run: |
           make -j1 V=s
 
+      
       - name: Collect firmware
         if: steps.check.outputs.build == 'true'
         run: |
+          set -e
+
+          rm -rf output
           mkdir -p output
 
-          find libwrt/bin/targets/qualcommax/ipq60xx \
-            -type f \
-            -exec cp -v {} output/ \;
+          FIRMWARE_DIR="libwrt/bin/targets/qualcommax/ipq60xx"
 
-          cp libwrt/Arthur.config output/Arthur.config
-          echo "Release: ${{ steps.check.outputs.tag }}" > output/SOURCE.txt
-          echo "Commit: $SOURCE_COMMIT" >> output/SOURCE.txt
+          FACTORY=$(find "$FIRMWARE_DIR" -maxdepth 1 -type f \
+            -name '*jdcloud_re-ss-01-squashfs-factory.bin' | head -n 1)
 
-          ls -lh output
+          SYSUPGRADE=$(find "$FIRMWARE_DIR" -maxdepth 1 -type f \
+            -name '*jdcloud_re-ss-01-squashfs-sysupgrade.bin' | head -n 1)
+
+          if [ -z "$FACTORY" ] || [ -z "$SYSUPGRADE" ]; then
+            echo "错误：没有找到工厂固件或升级固件！"
+            find "$FIRMWARE_DIR" -maxdepth 1 -type f -name '*.bin'
+            exit 1
+          fi
+
+          cp "$FACTORY" output/
+          cp "$SYSUPGRADE" output/
+
+          echo "最终发布文件："
+          ls -lh output/
+
+          COUNT=$(find output -maxdepth 1 -type f -name '*.bin' | wc -l)
+          if [ "$COUNT" -ne 2 ]; then
+            echo "错误：发布文件数量不是两个！"
+            exit 1
+          fi
 
       - name: Upload firmware
         if: steps.check.outputs.build == 'true'
@@ -195,7 +215,7 @@ jobs:
 
             设备平台：Qualcomm IPQ6000 / IPQ60XX
           files: |
-            output/*
+            output/*.bin
           fail_on_unmatched_files: true
           overwrite_files: true
           make_latest: true
