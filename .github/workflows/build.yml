@@ -128,37 +128,33 @@ jobs:
           ./scripts/feeds install -a
 
       
-      
-      - name: Generate JDCloud Arthur configuration
-        if: steps.check.outputs.build == 'true'
-        working-directory: libwrt
+      - name: Configure firmware
         run: |
           cat > .config <<'EOF'
           CONFIG_TARGET_qualcommax=y
           CONFIG_TARGET_qualcommax_ipq60xx=y
-          CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y
 
           CONFIG_PACKAGE_kmod-inet-diag=y
           CONFIG_PACKAGE_kmod-nft-tproxy=y
           CONFIG_PACKAGE_kmod-tun=y
+          CONFIG_PACKAGE_kmod-fs-ksmbd=m
           EOF
 
           make defconfig
 
-          grep -q '^CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y' .config || {
-            echo "京东云亚瑟设备配置不存在！"
-            exit 1
-          }
-
           for pkg in kmod-inet-diag kmod-nft-tproxy kmod-tun; do
             grep -q "^CONFIG_PACKAGE_${pkg}=y$" .config || {
-              echo "模块没有成功内置到固件：$pkg"
+              echo "$pkg 配置失败！"
               exit 1
             }
           done
 
-          cp .config Arthur.config
+          grep -q '^CONFIG_PACKAGE_kmod-fs-ksmbd=m$' .config || {
+            echo "kmod-fs-ksmbd 没有配置为模块模式！"
+            exit 1
+          }
 
+          cp .config Arthur.config
           echo "三个内核模块已选入固件："
           grep -E '^CONFIG_PACKAGE_kmod-(inet-diag|nft-tproxy|tun)=y$' .config
 
@@ -175,7 +171,7 @@ jobs:
           make -j1 V=s
 
       
-      - name: Collect firmware
+      - name: Collect firmware and ksmbd APK
         if: steps.check.outputs.build == 'true'
         run: |
           set -e
@@ -193,22 +189,26 @@ jobs:
 
           if [ -z "$FACTORY" ] || [ -z "$SYSUPGRADE" ]; then
             echo "错误：没有找到工厂固件或升级固件！"
-            find "$FIRMWARE_DIR" -maxdepth 1 -type f -name '*.bin'
             exit 1
           fi
 
           cp "$FACTORY" output/
           cp "$SYSUPGRADE" output/
 
-          echo "最终发布文件："
-          ls -lh output/
+          KSMBD=$(find libwrt/bin -type f \
+            -name 'kmod-fs-ksmbd_*.apk' | head -n 1)
 
-          COUNT=$(find output -maxdepth 1 -type f -name '*.bin' | wc -l)
-          if [ "$COUNT" -ne 2 ]; then
-            echo "错误：发布文件数量不是两个！"
+          if [ -z "$KSMBD" ]; then
+            echo "错误：没有找到 kmod-fs-ksmbd APK！"
+            find libwrt/bin -type f -iname '*ksmbd*'
             exit 1
           fi
 
+          cp "$KSMBD" output/
+
+          echo "最终发布文件："
+          ls -lh output/
+          
       - name: Upload firmware
         if: steps.check.outputs.build == 'true'
         uses: actions/upload-artifact@v4
@@ -233,7 +233,7 @@ jobs:
 
             设备平台：Qualcomm IPQ6000 / IPQ60XX
           files: |
-            output/*.bin
+            output/*
           fail_on_unmatched_files: true
           overwrite_files: true
           make_latest: true
