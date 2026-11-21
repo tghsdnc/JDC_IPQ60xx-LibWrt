@@ -127,11 +127,11 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      
-      - name: Configure firmware
-        if: steps.check.outputs.build == 'true'
-        working-directory: libwrt
-        run: |
+
+            - name: Configure firmware
+              if: steps.check.outputs.build == 'true'
+              working-directory: libwrt
+              run: |
           cat > .config <<'EOF'
           CONFIG_TARGET_qualcommax=y
           CONFIG_TARGET_qualcommax_ipq60xx=y
@@ -140,13 +140,21 @@ jobs:
           CONFIG_PACKAGE_kmod-inet-diag=y
           CONFIG_PACKAGE_kmod-nft-tproxy=y
           CONFIG_PACKAGE_kmod-tun=y
-          CONFIG_PACKAGE_kmod-fs-ksmbd=m
+          CONFIG_PACKAGE_kmod-fs-ksmbd=y
           EOF
 
           make defconfig
 
-          for pkg in kmod-inet-diag kmod-nft-tproxy kmod-tun; do
+          for pkg in kmod-inet-diag kmod-nft-tproxy kmod-tun kmod-fs-ksmbd; do
             grep -q "^CONFIG_PACKAGE_${pkg}=y$" .config || {
+              echo "$pkg 配置失败！"
+              exit 1
+            }
+          done
+
+          cp .config Arthur.config
+          echo "以下内核模块已内置到固件："
+          grep -E '^CONFIG_PACKAGE_kmod-(inet-diag|nft-tproxy|tun|fs-ksmbd)=y$' .config
               echo "$pkg 配置失败！"
               exit 1
             }
@@ -173,8 +181,7 @@ jobs:
         run: |
           make -j1 V=s
 
-      
-      - name: Collect firmware and ksmbd APK
+      - name: Collect firmware
         if: steps.check.outputs.build == 'true'
         run: |
           set -e
@@ -184,33 +191,13 @@ jobs:
 
           FIRMWARE_DIR="libwrt/bin/targets/qualcommax/ipq60xx"
 
-          FACTORY=$(find "$FIRMWARE_DIR" -maxdepth 1 -type f \
-            -name '*jdcloud_re-ss-01-squashfs-factory.bin' | head -n 1)
-
-          SYSUPGRADE=$(find "$FIRMWARE_DIR" -maxdepth 1 -type f \
-            -name '*jdcloud_re-ss-01-squashfs-sysupgrade.bin' | head -n 1)
-
-          if [ -z "$FACTORY" ] || [ -z "$SYSUPGRADE" ]; then
-            echo "错误：没有找到工厂固件或升级固件！"
-            exit 1
-          fi
-
-          cp "$FACTORY" output/
-          cp "$SYSUPGRADE" output/
-
-          KSMBD=$(find libwrt/bin -type f \
-            -name 'kmod-fs-ksmbd-*.apk' | head -n 1)
-
-          if [ -z "$KSMBD" ]; then
-            echo "错误：没有找到 kmod-fs-ksmbd APK！"
-            find libwrt/bin -type f -iname '*ksmbd*'
-            exit 1
-          fi
-
-          cp "$KSMBD" output/
+          # 有什么固件就收集什么，不再强制要求特定文件
+          find "$FIRMWARE_DIR" -maxdepth 1 -type f \
+            -name '*jdcloud_re-ss-01*.bin' -exec cp {} output/ \;
 
           echo "最终发布文件："
           ls -lh output/
+      
           
       - name: Upload firmware
         if: steps.check.outputs.build == 'true'
