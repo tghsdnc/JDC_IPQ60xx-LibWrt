@@ -129,6 +129,8 @@ jobs:
 
       
       - name: Configure firmware
+        if: steps.check.outputs.build == 'true'
+        working-directory: libwrt
         run: |
           cat > .config <<'EOF'
           CONFIG_TARGET_qualcommax=y
