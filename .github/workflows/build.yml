@@ -199,7 +199,7 @@ jobs:
           cp "$SYSUPGRADE" output/
 
           KSMBD=$(find libwrt/bin -type f \
-            -name 'kmod-fs-ksmbd_*.apk' | head -n 1)
+            -name 'kmod-fs-ksmbd-*.apk' | head -n 1)
 
           if [ -z "$KSMBD" ]; then
             echo "错误：没有找到 kmod-fs-ksmbd APK！"
