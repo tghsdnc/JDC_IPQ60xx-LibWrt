@@ -4,3 +4,4 @@
 kmod-nft-tproxy  
 kmod-tun  
 kmod-inet-diag  
+kmod-fs-ksmbd
